@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dot Clock</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            background-color: #000;
+            overflow: hidden;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            cursor: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="clockCanvas"></canvas>
+
+    <script>
+        /**
+         * DOT CLOCK - Nothing OS Style Matrix Clock for Android TV
+         * Pure HTML5 Canvas & Vanilla JS implementation.
+         */
+
+        // ============================================================================
+        // 1. CONFIGURATION & STATE MANAGEMENT
+        // ============================================================================
+        const CONFIG = {
+            LAT: 20.59,
+            LON: 78.96, // Default: India center coordinates
+            TIME_ZONE: "Asia/Kolkata",
+            DEFAULT_24H: false,
+            ACCENT: "#ff3b30",
+            ACCENT_COLORS: ["#ff3b30", "#ffffff", "#ffcc00", "#00d2ff"], // Red, White, Amber, Cyan
+            MAX_FPS: 30,
+            GRID_DIVISOR: 38, // Grid spacing = min(width, height) / GRID_DIVISOR
+            SAFE_MARGIN: 0.05, // 5% overscan margin for TV
+            BURNT_IN_DRIFT_MAX: 12, // Max drift pixels for burn-in protection
+            RIPPLE_DURATION: 400, // Digit transition ripple duration in ms
+        };
+
+        // Persistent settings state
+        let state = {
+            is24h: CONFIG.DEFAULT_24H,
+            brightnessStep: 5, // 1 to 5
+            accentIndex: 0,
+            gridDensityFactor: 1.0, // Adaptive performance degradation factor
+            cloudCount: 4,
+            starCount: 60
+        };
+
+        // Load persisted settings
+        try {
+            const saved = localStorage.getItem("dot_clock_settings");
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (typeof parsed.is24h === "boolean") state.is24h = parsed.is24h;
+                if (typeof parsed.brightnessStep === "number") state.brightnessStep = Math.max(1, Math.min(5, parsed.brightnessStep));
+                if (typeof parsed.accentIndex === "number") state.accentIndex = Math.max(0, Math.min(CONFIG.ACCENT_COLORS.length - 1, parsed.accentIndex));
+            }
+        } catch (e) {
+            // LocalStorage inaccessible
+        }
+
+        function saveSettings() {
+            try {
+                localStorage.setItem("dot_clock_settings", JSON.stringify({
+                    is24h: state.is24h,
+                    brightnessStep: state.brightnessStep,
+                    accentIndex: state.accentIndex
+                }));
+            } catch (e) {}
+        }
+
+        // Check reduced motion preference
+        const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        // ============================================================================
+        // 2. DOT MATRIX FONT & DIGIT UTILITIES
+        // ============================================================================
+        // 5x7 Dot-matrix representation of digits 0-9 and letters A, P, M
+        const FONT_5X7 = {
+            '0': [
+                0,1,1,1,0,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                0,1,1,1,0
+            ],
+            '1': [
+                0,0,1,0,0,
+                0,1,1,0,0,
+                0,0,1,0,0,
+                0,0,1,0,0,
+                0,0,1,0,0,
+                0,0,1,0,0,
+                0,1,1,1,0
+            ],
+            '2': [
+                0,1,1,1,0,
+                1,0,0,0,1,
+                0,0,0,0,1,
+                0,0,1,1,0,
+                0,1,0,0,0,
+                1,0,0,0,0,
+                1,1,1,1,1
+            ],
+            '3': [
+                0,1,1,1,0,
+                1,0,0,0,1,
+                0,0,0,0,1,
+                0,0,1,1,0,
+                0,0,0,0,1,
+                1,0,0,0,1,
+                0,1,1,1,0
+            ],
+            '4': [
+                0,0,0,1,0,
+                0,0,1,1,0,
+                0,1,0,1,0,
+                1,0,0,1,0,
+                1,1,1,1,1,
+                0,0,0,1,0,
+                0,0,0,1,0
+            ],
+            '5': [
+                1,1,1,1,1,
+                1,0,0,0,0,
+                1,1,1,1,0,
+                0,0,0,0,1,
+                0,0,0,0,1,
+                1,0,0,0,1,
+                0,1,1,1,0
+            ],
+            '6': [
+                0,1,1,1,0,
+                1,0,0,0,0,
+                1,1,1,1,0,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                0,1,1,1,0
+            ],
+            '7': [
+                1,1,1,1,1,
+                0,0,0,0,1,
+                0,0,0,1,0,
+                0,0,1,0,0,
+                0,1,0,0,0,
+                0,1,0,0,0,
+                0,1,0,0,0
+            ],
+            '8': [
+                0,1,1,1,0,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                0,1,1,1,0,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                0,1,1,1,0
+            ],
+            '9': [
+                0,1,1,1,0,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                0,1,1,1,1,
+                0,0,0,0,1,
+                0,0,0,0,1,
+                0,1,1,1,0
+            ],
+            'A': [
+                0,1,1,1,0,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,1,1,1,1,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1
+            ],
+            'P': [
+                1,1,1,1,0,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,1,1,1,0,
+                1,0,0,0,0,
+                1,0,0,0,0,
+                1,0,0,0,0
+            ],
+            'M': [
+                1,0,0,0,1,
+                1,1,0,1,1,
+                1,0,1,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1,
+                1,0,0,0,1
+            ]
+        };
+
+        // Transition states tracking for time digits (ripple effect)
+        let digitStates = Array.from({ length: 4 }, () => ({
+            current: '0',
+            previous: '0',
+            changeTime: 0
+        }));
+
+        // ============================================================================
+        // 3. ASTRONOMICAL CALCULATIONS (NOAA SOLAR & MOON PHASE)
+        // ============================================================================
+        let solarData = { sunrise: 6 * 3600, sunset: 18 * 3600 };
+        let moonPhase = 0; // 0..1
+        let lastSolarUpdateDay = -1;
+        let lastMoonUpdateMinute = -1;
+
+        function updateSolarAndMoon(nowDate) {
+            const currentDay = nowDate.getDate();
+            const currentMinute = nowDate.getMinutes();
+
+            // Recompute sunrise/sunset daily
+            if (currentDay !== lastSolarUpdateDay) {
+                solarData = computeSunriseSunset(nowDate, CONFIG.LAT, CONFIG.LON);
+                lastSolarUpdateDay = currentDay;
+            }
+
+            // Recompute moon phase every minute
+            if (currentMinute !== lastMoonUpdateMinute) {
+                const synodicMonth = 29.530588853;
+                const refTime = Date.UTC(2000, 0, 6, 18, 14, 0);
+                const daysDiff = (nowDate.getTime() - refTime) / (86400 * 1000);
+                moonPhase = ((daysDiff % synodicMonth) + synodicMonth) % synodicMonth / synodicMonth;
+                lastMoonUpdateMinute = currentMinute;
+            }
+        }
+
+        function computeSunriseSunset(date, lat, lon) {
+            const year = date.getFullYear();
+            const month = date.getMonth() + 1;
+            const day = date.getDate();
+
+            const N1 = Math.floor(275 * month / 9);
+            const N2 = Math.floor((month + 9) / 12);
+            const N3 = (1 + Math.floor((year - 4 * Math.floor(year / 4) + 2) / 3));
+            const N = N1 - (N2 * N3) + day - 30;
+
+            const lngHour = lon / 15;
+            
+            function calcTime(isSunrise) {
+                const t = N + ((isSunrise ? 6 : 18) - lngHour) / 24;
+                const M = (0.9856 * t) - 3.289;
+                let L = M + (1.916 * Math.sin(M * Math.PI / 180)) + (0.020 * Math.sin(2 * M * Math.PI / 180)) + 282.634;
+                L = (L + 360) % 360;
+
+                let RA = Math.atan(0.91764 * Math.tan(L * Math.PI / 180)) * 180 / Math.PI;
+                RA = (RA + 360) % 360;
+
+                const Lquadrant = (Math.floor(L / 90)) * 90;
+                const RAquadrant = (Math.floor(RA / 90)) * 90;
+                RA = RA + (Lquadrant - RAquadrant);
+                RA = RA / 15;
+
+                const sinDec = 0.39782 * Math.sin(L * Math.PI / 180);
+                const cosDec = Math.cos(Math.asin(sinDec));
+                const cosH = (Math.cos(90.833 * Math.PI / 180) - (sinDec * Math.sin(lat * Math.PI / 180))) / (cosDec * Math.cos(lat * Math.PI / 180));
+
+                if (cosH > 1 || cosH < -1) return isSunrise ? 6 * 3600 : 18 * 3600;
+
+                let H = isSunrise ? 360 - (Math.acos(cosH) * 180 / Math.PI) : Math.acos(cosH) * 180 / Math.PI;
+                H = H / 15;
+
+                const T = H + RA - (0.06571 * t) - 6.622;
+                let UT = (T - lngHour + 24) % 24;
+                return UT * 3600;
+            }
+
+            return {
+                sunrise: calcTime(true),
+                sunset: calcTime(false)
+            };
+        }
+
+        // ============================================================================
+        // 4. ANIMATION PARTICLES (STARS, SHOOTING STARS, CLOUDS)
+        // ============================================================================
+        let stars = [];
+        let clouds = [];
+        let shootingStar = null;
+        let nextShootingStarTime = 0;
+
+        function initSkyElements(w, h) {
+            stars = [];
+            for (let i = 0; i < state.starCount; i++) {
+                stars.push({
+                    x: Math.random() * w,
+                    y: Math.random() * h * 0.65,
+                    speed: 0.5 + Math.random() * 2.5,
+                    offset: Math.random() * Math.PI * 2
+                });
+            }
+
+            clouds = [];
+            for (let i = 0; i < state.cloudCount; i++) {
+                clouds.push(createCloud(w, h));
+            }
+        }
+
+        function createCloud(w, h) {
+            const dots = [];
+            const radius = 25 + Math.random() * 35;
+            const dotCount = 18 + Math.floor(Math.random() * 20);
+            for (let j = 0; j < dotCount; j++) {
+                const a = Math.random() * Math.PI * 2;
+                const r = Math.sqrt(Math.random()) * radius;
+                dots.push({
+                    dx: Math.cos(a) * r,
+                    dy: Math.sin(a) * r * 0.4,
+                    opacity: 0.2 + Math.random() * 0.3
+                });
+            }
+            return {
+                x: Math.random() * (w + 200) - 100,
+                y: h * 0.1 + Math.random() * (h * 0.35),
+                speed: 0.15 + Math.random() * 0.25,
+                dots: dots
+            };
+        }
+
+        function triggerShootingStar(now, w, h) {
+            if (now > nextShootingStarTime) {
+                shootingStar = {
+                    startX: Math.random() * w * 0.8,
+                    startY: Math.random() * h * 0.3,
+                    vx: 4 + Math.random() * 4,
+                    vy: 2 + Math.random() * 2,
+                    length: 12 + Math.floor(Math.random() * 10),
+                    progress: 0,
+                    duration: 1000 + Math.random() * 800
+                };
+                nextShootingStarTime = now + (20000 + Math.random() * 40000);
+            }
+        }
+
+        // ============================================================================
+        // 5. MAIN RENDER ENGINE
+        // ============================================================================
+        const canvas = document.getElementById("clockCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let viewportWidth = 0;
+        let viewportHeight = 0;
+        let dpr = 1;
+
+        let burnInOffset = { x: 0, y: 0, targetX: 0, targetY: 0 };
+        let lastBurnInUpdate = -1;
+
+        let indicatorState = {
+            active: false,
+            hideTime: 0,
+            type: ''
+        };
+
+        function resize() {
+            dpr = Math.min(window.devicePixelRatio || 1, 2);
+            viewportWidth = window.innerWidth;
+            viewportHeight = window.innerHeight;
+
+            canvas.width = viewportWidth * dpr;
+            canvas.height = viewportHeight * dpr;
+
+            ctx.scale(dpr, dpr);
+            initSkyElements(viewportWidth, viewportHeight);
+        }
+
+        window.addEventListener("resize", resize);
+
+        let frameTimes = [];
+        let startTime = performance.now();
+        let benchmarkDone = false;
+
+        function render(now) {
+            if (!benchmarkDone) {
+                frameTimes.push(now);
+                if (now - startTime > 3000) {
+                    benchmarkDone = true;
+                    if (frameTimes.length > 0) {
+                        const avgFrameTime = (now - startTime) / frameTimes.length;
+                        if (avgFrameTime > 40) {
+                            state.gridDensityFactor = 1.4;
+                            state.cloudCount = 2;
+                            state.starCount = 30;
+                            initSkyElements(viewportWidth, viewportHeight);
+                        }
+                    }
+                }
+            }
+
+            const nowDate = getISTDate();
+            const currentMinute = nowDate.getMinutes();
+            if (currentMinute !== lastBurnInUpdate) {
+                burnInOffset.targetX = (Math.random() * 2 - 1) * CONFIG.BURNT_IN_DRIFT_MAX;
+                burnInOffset.targetY = (Math.random() * 2 - 1) * CONFIG.BURNT_IN_DRIFT_MAX;
+                lastBurnInUpdate = currentMinute;
+            }
+            burnInOffset.x += (burnInOffset.targetX - burnInOffset.x) * 0.02;
+            burnInOffset.y += (burnInOffset.targetY - burnInOffset.y) * 0.02;
+
+            updateSolarAndMoon(nowDate);
+
+            const utcSeconds = nowDate.getUTCHours() * 3600 + nowDate.getUTCMinutes() * 60 + nowDate.getUTCSeconds() + nowDate.getUTCMilliseconds() / 1000;
+            const sunrise = solarData.sunrise;
+            const sunset = solarData.sunset;
+            const dawnStart = sunrise - 45 * 60;
+            const duskEnd = sunset + 45 * 60;
+
+            let dayPhase = "night";
+            let phaseProgress = 0;
+
+            if (utcSeconds >= dawnStart && utcSeconds < sunrise) {
+                dayPhase = "dawn";
+                phaseProgress = (utcSeconds - dawnStart) / (45 * 60);
+            } else if (utcSeconds >= sunrise && utcSeconds < sunset) {
+                dayPhase = "day";
+                phaseProgress = (utcSeconds - sunrise) / (sunset - sunrise);
+            } else if (utcSeconds >= sunset && utcSeconds < duskEnd) {
+                dayPhase = "dusk";
+                phaseProgress = (utcSeconds - sunset) / (45 * 60);
+            } else {
+                dayPhase = "night";
+                if (utcSeconds >= duskEnd) {
+                    phaseProgress = (utcSeconds - duskEnd) / (24 * 3600 - duskEnd + dawnStart);
+                } else {
+                    phaseProgress = (utcSeconds + (24 * 3600 - duskEnd)) / (24 * 3600 - duskEnd + dawnStart);
+                }
+            }
+
+            const nightDimStart = sunset + 2 * 3600;
+            const nightDimEnd = (sunrise - 1 * 3600 + 24 * 3600) % (24 * 3600);
+            let isNightDim = false;
+            if (nightDimStart < nightDimEnd) {
+                isNightDim = (utcSeconds >= nightDimStart && utcSeconds <= nightDimEnd);
+            } else {
+                isNightDim = (utcSeconds >= nightDimStart || utcSeconds <= nightDimEnd);
+            }
+
+            // 50% overall brightness factor
+            const userBrightness = state.brightnessStep / 5.0;
+            const ambientDimFactor = isNightDim ? 0.55 : 1.0;
+            const globalAlpha = userBrightness * ambientDimFactor * 0.5;
+
+            // Clean frame render without motion blur trails
+            ctx.clearRect(0, 0, viewportWidth, viewportHeight);
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(0, 0, viewportWidth, viewportHeight);
+
+            const gridStep = (Math.min(viewportWidth, viewportHeight) / CONFIG.GRID_DIVISOR) * state.gridDensityFactor;
+            const dotRadius = Math.max(1, gridStep * 0.2);
+
+            const clockCols = 25;
+            const clockRows = 7;
+            const clockDotStep = Math.min(viewportWidth * 0.8 / clockCols, viewportHeight * 0.3 / clockRows);
+            const clockWidth = clockCols * clockDotStep;
+            const clockHeight = clockRows * clockDotStep;
+
+            // Centered perfectly on screen
+            const clockX = (viewportWidth - clockWidth) / 2 + burnInOffset.x;
+            const clockY = (viewportHeight - clockHeight) / 2 + burnInOffset.y;
+
+            const clockExclusionBox = {
+                x1: clockX - gridStep * 2,
+                y1: clockY - gridStep * 2,
+                x2: clockX + clockWidth + gridStep * 4,
+                y2: clockY + clockHeight + gridStep * 4
+            };
+
+            const bodyRadius = Math.min(viewportHeight * 0.1, viewportWidth * 0.13);
+            let bodyX = -100, bodyY = -100;
+            const arcStartX = viewportWidth * 0.1;
+            const arcEndX = viewportWidth * 0.9;
+            const arcTopY = viewportHeight * 0.18;
+            const arcHorizonY = viewportHeight * 0.55;
+
+            if (dayPhase === "day" || dayPhase === "dawn" || dayPhase === "dusk") {
+                let sunProg = phaseProgress;
+                if (dayPhase === "dawn") sunProg = phaseProgress * 0.1;
+                if (dayPhase === "dusk") sunProg = 0.9 + phaseProgress * 0.1;
+                bodyX = arcStartX + sunProg * (arcEndX - arcStartX);
+                bodyY = arcHorizonY - Math.sin(sunProg * Math.PI) * (arcHorizonY - arcTopY);
+            } else {
+                let moonProg = phaseProgress;
+                bodyX = arcStartX + moonProg * (arcEndX - arcStartX);
+                bodyY = arcHorizonY - Math.sin(moonProg * Math.PI) * (arcHorizonY - arcTopY);
+            }
+
+            const bodyExclusionBox = {
+                x1: bodyX - bodyRadius - gridStep,
+                y1: bodyY - bodyRadius - gridStep,
+                x2: bodyX + bodyRadius + gridStep,
+                y2: bodyY + bodyRadius + gridStep
+            };
+
+            // ------------------------------------------------------------------------
+            // DRAW AMBIENT GRID & HORIZON DAWN/DUSK TINT
+            // ------------------------------------------------------------------------
+            const activeAccent = CONFIG.ACCENT_COLORS[state.accentIndex];
+            
+            for (let x = gridStep / 2; x < viewportWidth; x += gridStep) {
+                for (let y = gridStep / 2; y < viewportHeight; y += gridStep) {
+                    if (x >= clockExclusionBox.x1 && x <= clockExclusionBox.x2 && y >= clockExclusionBox.y1 && y <= clockExclusionBox.y2) continue;
+                    if (x >= bodyExclusionBox.x1 && x <= bodyExclusionBox.x2 && y >= bodyExclusionBox.y1 && y <= bodyExclusionBox.y2) continue;
+
+                    let opacity = 0.08 * globalAlpha;
+                    let dotColor = "#f4f4f2";
+
+                    if (dayPhase === "dawn" || dayPhase === "dusk") {
+                        const horizonDist = Math.max(0, 1 - Math.abs(y - arcHorizonY) / (viewportHeight * 0.4));
+                        if (horizonDist > 0) {
+                            opacity += horizonDist * 0.15 * globalAlpha;
+                            dotColor = activeAccent;
+                        }
+                    }
+
+                    ctx.fillStyle = dotColor;
+                    ctx.globalAlpha = opacity;
+                    ctx.beginPath();
+                    ctx.arc(x, y, dotRadius * 0.7, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            // ------------------------------------------------------------------------
+            // DRAW STARS & SHOOTING STARS
+            // ------------------------------------------------------------------------
+            if (dayPhase === "night" || dayPhase === "dawn" || dayPhase === "dusk") {
+                let starVisibility = 1.0;
+                if (dayPhase === "dawn") starVisibility = 1.0 - phaseProgress;
+                if (dayPhase === "dusk") starVisibility = phaseProgress;
+
+                ctx.fillStyle = "#f4f4f2";
+                stars.forEach(star => {
+                    if (star.x >= clockExclusionBox.x1 && star.x <= clockExclusionBox.x2 && star.y >= clockExclusionBox.y1 && star.y <= clockExclusionBox.y2) return;
+                    
+                    const twinkle = (Math.sin(now * 0.002 * star.speed + star.offset) + 1) / 2;
+                    ctx.globalAlpha = (0.2 + twinkle * 0.7) * starVisibility * globalAlpha;
+                    ctx.beginPath();
+                    ctx.arc(star.x, star.y, dotRadius * 0.9, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+
+                triggerShootingStar(now, viewportWidth, viewportHeight);
+                if (shootingStar) {
+                    const elapsed = now - (shootingStar.startTime || (shootingStar.startTime = now));
+                    const p = elapsed / shootingStar.duration;
+                    if (p >= 1) {
+                        shootingStar = null;
+                    } else {
+                        const currX = shootingStar.startX + shootingStar.vx * (elapsed * 0.1);
+                        const currY = shootingStar.startY + shootingStar.vy * (elapsed * 0.1);
+                        for (let k = 0; k < shootingStar.length; k++) {
+                            const tailX = currX - (shootingStar.vx * k * 1.5);
+                            const tailY = currY - (shootingStar.vy * k * 1.5);
+                            const tailAlpha = (1 - (k / shootingStar.length)) * (1 - p) * starVisibility * globalAlpha;
+                            ctx.fillStyle = "#ffffff";
+                            ctx.globalAlpha = Math.max(0, tailAlpha);
+                            ctx.beginPath();
+                            ctx.arc(tailX, tailY, dotRadius * (1 - k / shootingStar.length * 0.5), 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                }
+            }
+
+            // ------------------------------------------------------------------------
+            // DRAW CLOUDS
+            // ------------------------------------------------------------------------
+            clouds.forEach(cloud => {
+                cloud.x += cloud.speed;
+                if (cloud.x - 100 > viewportWidth) cloud.x = -150;
+
+                cloud.dots.forEach(d => {
+                    const cx = cloud.x + d.dx;
+                    const cy = cloud.y + d.dy;
+                    if (cx >= clockExclusionBox.x1 && cx <= clockExclusionBox.x2 && cy >= clockExclusionBox.y1 && cy <= clockExclusionBox.y2) return;
+
+                    ctx.fillStyle = "#f4f4f2";
+                    ctx.globalAlpha = d.opacity * 0.4 * globalAlpha;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, dotRadius * 1.1, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            });
+
+            // ------------------------------------------------------------------------
+            // DRAW SUN OR MOON
+            // ------------------------------------------------------------------------
+            if (dayPhase === "day" || dayPhase === "dawn" || dayPhase === "dusk") {
+                ctx.fillStyle = activeAccent;
+                ctx.globalAlpha = 0.95 * globalAlpha;
+                
+                const coreDotGrid = 5;
+                const coreStep = (bodyRadius * 0.8) / coreDotGrid;
+                for (let cx = -2; cx <= 2; cx++) {
+                    for (let cy = -2; cy <= 2; cy++) {
+                        if (cx * cx + cy * cy <= 5) {
+                            ctx.beginPath();
+                            ctx.arc(bodyX + cx * coreStep, bodyY + cy * coreStep, dotRadius * 1.1, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                }
+
+                const rayAngleStep = (Math.PI * 2) / 12;
+                const rotOffset = now * 0.0003;
+                for (let r = 0; r < 12; r++) {
+                    const angle = r * rayAngleStep + rotOffset;
+                    for (let d = 1; d <= 3; d++) {
+                        const dist = bodyRadius * 0.55 + d * (dotRadius * 2.8);
+                        const rx = bodyX + Math.cos(angle) * dist;
+                        const ry = bodyY + Math.sin(angle) * dist;
+
+                        const pulse = (Math.sin(now * 0.004 - d * 0.8) + 1) / 2;
+                        ctx.globalAlpha = (0.35 + pulse * 0.6) * globalAlpha;
+                        ctx.beginPath();
+                        ctx.arc(rx, ry, dotRadius * 0.9, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            } else {
+                const phase = moonPhase;
+                const q = Math.min(phase, 1 - phase);
+                const isWaxing = phase <= 0.5;
+
+                const gridCount = 11;
+                const mStep = (bodyRadius * 1.8) / gridCount;
+
+                const moonBreathing = 0.85 + Math.sin(now * 0.001) * 0.1;
+
+                for (let gx = -5; gx <= 5; gx++) {
+                    for (let gy = -5; gy <= 5; gy++) {
+                        const nx = gx / 5.0;
+                        const ny = gy / 5.0;
+                        if (nx * nx + ny * ny <= 1.0) {
+                            const s = Math.sqrt(1 - ny * ny);
+                            const terminator = Math.cos(2 * Math.PI * q) * s;
+
+                            let isLit = false;
+                            if (isWaxing) {
+                                isLit = nx > -terminator;
+                            } else {
+                                isLit = nx < terminator;
+                            }
+
+                            const mx = bodyX + gx * mStep;
+                            const my = bodyY + gy * mStep;
+
+                            if (isLit) {
+                                ctx.fillStyle = "#f4f4f2";
+                                ctx.globalAlpha = moonBreathing * globalAlpha;
+                            } else {
+                                ctx.fillStyle = "#f4f4f2";
+                                ctx.globalAlpha = 0.12 * globalAlpha;
+                            }
+
+                            ctx.beginPath();
+                            ctx.arc(mx, my, dotRadius * 1.0, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                }
+            }
+
+            // ------------------------------------------------------------------------
+            // DRAW TIME DIGITS & COLON
+            // ------------------------------------------------------------------------
+            const { hStr, mStr, isPM } = getFormattedTime(nowDate, state.is24h);
+            const fullTimeString = hStr + mStr;
+
+            for (let i = 0; i < 4; i++) {
+                const char = fullTimeString[i];
+                if (char !== digitStates[i].current) {
+                    digitStates[i].previous = digitStates[i].current;
+                    digitStates[i].current = char;
+                    digitStates[i].changeTime = now;
+                }
+            }
+
+            const digitDotRadius = clockDotStep * 0.38;
+            const colOffsets = [0, 6, 14, 20];
+
+            for (let dIdx = 0; dIdx < 4; dIdx++) {
+                const colStart = colOffsets[dIdx];
+                const stateObj = digitStates[dIdx];
+                const currMatrix = FONT_5X7[stateObj.current] || Array(35).fill(0);
+                const prevMatrix = FONT_5X7[stateObj.previous] || Array(35).fill(0);
+
+                const elapsed = now - stateObj.changeTime;
+                const isTransitioning = !prefersReducedMotion && elapsed < CONFIG.RIPPLE_DURATION;
+                const transitionProgress = isTransitioning ? elapsed / CONFIG.RIPPLE_DURATION : 1.0;
+
+                for (let r = 0; r < 7; r++) {
+                    for (let c = 0; c < 5; c++) {
+                        const idx = r * 5 + c;
+                        const isCurrLit = currMatrix[idx] === 1;
+                        const isPrevLit = prevMatrix[idx] === 1;
+
+                        const dx = clockX + (colStart + c) * clockDotStep + clockDotStep / 2;
+                        const dy = clockY + r * clockDotStep + clockDotStep / 2;
+
+                        let isLit = isCurrLit;
+
+                        if (isTransitioning) {
+                            const rowThreshold = r / 7.0;
+                            if (transitionProgress >= rowThreshold) {
+                                isLit = isCurrLit;
+                            } else {
+                                isLit = isPrevLit;
+                            }
+                        }
+
+                        const dotAlpha = isLit ? 0.95 : 0.11;
+
+                        ctx.fillStyle = "#f4f4f2";
+                        ctx.globalAlpha = dotAlpha * globalAlpha;
+                        ctx.beginPath();
+                        ctx.arc(dx, dy, digitDotRadius, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            // Blinking Colon (2 red dots)
+            const colonVisible = Math.floor(now / 1000) % 2 === 0;
+            const colonCol = 12;
+            const colonX = clockX + colonCol * clockDotStep + clockDotStep / 2;
+            const colonY1 = clockY + 2 * clockDotStep + clockDotStep / 2;
+            const colonY2 = clockY + 4 * clockDotStep + clockDotStep / 2;
+
+            ctx.fillStyle = activeAccent;
+            ctx.globalAlpha = colonVisible ? 0.95 * globalAlpha : 0.11 * globalAlpha;
+            
+            ctx.beginPath();
+            ctx.arc(colonX, colonY1, digitDotRadius, 0, Math.PI * 2);
+            ctx.arc(colonX, colonY2, digitDotRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // AM / PM Indicator
+            if (!state.is24h) {
+                const ampmStr = isPM ? "PM" : "AM";
+                const subScale = 0.34;
+                const subDotStep = clockDotStep * subScale;
+                const subDotRadius = subDotStep * 0.4;
+                const ampmX = clockX + 25 * clockDotStep - (11 * subDotStep);
+                const ampmY = clockY + 7 * clockDotStep + (subDotStep * 1.5);
+
+                for (let l = 0; l < 2; l++) {
+                    const char = ampmStr[l];
+                    const matrix = FONT_5X7[char] || [];
+                    const charColOffset = l * 6;
+
+                    for (let r = 0; r < 7; r++) {
+                        for (let c = 0; c < 5; c++) {
+                            const isLit = matrix[r * 5 + c] === 1;
+                            const sx = ampmX + (charColOffset + c) * subDotStep;
+                            const sy = ampmY + r * subDotStep;
+
+                            ctx.fillStyle = "#f4f4f2";
+                            ctx.globalAlpha = (isLit ? 0.45 : 0.08) * globalAlpha;
+                            ctx.beginPath();
+                            ctx.arc(sx, sy, subDotRadius, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                }
+            }
+
+            // ------------------------------------------------------------------------
+            // DRAW ON-SCREEN D-PAD INDICATOR
+            // ------------------------------------------------------------------------
+            if (indicatorState.active) {
+                if (now > indicatorState.hideTime) {
+                    indicatorState.active = false;
+                } else {
+                    const indX = viewportWidth / 2;
+                    const indY = viewportHeight * 0.92;
+                    ctx.fillStyle = activeAccent;
+
+                    if (indicatorState.type === 'brightness') {
+                        for (let b = 1; b <= 5; b++) {
+                            const bx = indX + (b - 3) * (dotRadius * 4);
+                            ctx.globalAlpha = (b <= state.brightnessStep ? 0.9 : 0.2) * globalAlpha;
+                            ctx.beginPath();
+                            ctx.arc(bx, indY, dotRadius * 1.5, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    } else if (indicatorState.type === 'accent' || indicatorState.type === 'format') {
+                        ctx.globalAlpha = 0.9 * globalAlpha;
+                        ctx.beginPath();
+                        ctx.arc(indX, indY, dotRadius * 2, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            setTimeout(() => {
+                requestAnimationFrame(render);
+            }, 1000 / CONFIG.MAX_FPS);
+        }
+
+        // ============================================================================
+        // 6. TIME FORMATTING & TIMEZONE UTILITIES
+        // ============================================================================
+        function getISTDate() {
+            try {
+                const now = new Date();
+                const istString = now.toLocaleString("en-US", { timeZone: CONFIG.TIME_ZONE });
+                return new Date(istString);
+            } catch (e) {
+                return new Date();
+            }
+        }
+
+        function getFormattedTime(date, is24h) {
+            let hours = date.getHours();
+            const minutes = date.getMinutes();
+            const isPM = hours >= 12;
+
+            if (!is24h) {
+                hours = hours % 12;
+                if (hours === 0) hours = 12;
+            }
+
+            const hStr = is24h ? String(hours).padStart(2, '0') : String(hours).padStart(2, ' ');
+            const mStr = String(minutes).padStart(2, '0');
+
+            return { hStr, mStr, isPM };
+        }
+
+        // ============================================================================
+        // 7. INPUT HANDLERS & REMOTE CONTROL
+        // ============================================================================
+        function triggerIndicator(type) {
+            indicatorState.active = true;
+            indicatorState.type = type;
+            indicatorState.hideTime = performance.now() + 2000;
+        }
+
+        function handleInteraction() {
+            try {
+                if ('wakeLock' in navigator && !window.wakeLockRef) {
+                    navigator.wakeLock.request('screen').then(lock => {
+                        window.wakeLockRef = lock;
+                    }).catch(() => {});
+                }
+            } catch (e) {}
+
+            try {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(() => {});
+                }
+            } catch (e) {}
+        }
+
+        window.addEventListener("keydown", (e) => {
+            handleInteraction();
+
+            switch (e.key) {
+                case "Enter":
+                case "Select":
+                case "OK":
+                    state.is24h = !state.is24h;
+                    saveSettings();
+                    triggerIndicator('format');
+                    break;
+                case "ArrowUp":
+                    state.brightnessStep = Math.min(5, state.brightnessStep + 1);
+                    saveSettings();
+                    triggerIndicator('brightness');
+                    break;
+                case "ArrowDown":
+                    state.brightnessStep = Math.max(1, state.brightnessStep - 1);
+                    saveSettings();
+                    triggerIndicator('brightness');
+                    break;
+                case "ArrowLeft":
+                    state.accentIndex = (state.accentIndex - 1 + CONFIG.ACCENT_COLORS.length) % CONFIG.ACCENT_COLORS.length;
+                    saveSettings();
+                    triggerIndicator('accent');
+                    break;
+                case "ArrowRight":
+                    state.accentIndex = (state.accentIndex + 1) % CONFIG.ACCENT_COLORS.length;
+                    saveSettings();
+                    triggerIndicator('accent');
+                    break;
+                case "Escape":
+                case "Back":
+                    break;
+            }
+        });
+
+        window.addEventListener("click", handleInteraction);
+
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) {
+                if (animFrameId) cancelAnimationFrame(animFrameId);
+            } else {
+                requestAnimationFrame(render);
+            }
+        });
+
+        resize();
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>
